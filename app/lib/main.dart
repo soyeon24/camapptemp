@@ -14,6 +14,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'hub_config.dart';
+import 'hub_setup.dart';
+import 'palette.dart';
 import 'posture_source.dart';
 import 'posture_state.dart';
 
@@ -23,20 +26,6 @@ import 'posture_state.dart';
 const _hubUrl = String.fromEnvironment('DESKMATE_HUB_URL');
 
 void main() => runApp(const PostureApp());
-
-const _bg = Color(0xFF0F1420);
-const _surface = Color(0xFF171D2B);
-const _line = Color(0xFF2A3348);
-const _ink = Color(0xFFE8ECF4);
-const _muted = Color(0xFF9AA6BD);
-const _dim = Color(0xFF5A667E);
-
-const _green = Color(0xFF37D0A0);
-const _amber = Color(0xFFF5B455);
-const _red = Color(0xFFFF7A7A);
-const _blue = Color(0xFF5E9BFF);
-const _violet = Color(0xFFB98BFF);
-const _gray = Color(0xFF8A93A6);
 
 class PostureLook {
   const PostureLook(this.ko, this.en, this.color, this.icon, this.desc);
@@ -50,19 +39,19 @@ class PostureLook {
 /// 라벨별 화면 표현. 한국어 이름은 노드의 `LABEL_TEXT` 와 같은 말을 쓴다 —
 /// 같은 상태를 Pi 4 로그와 Pi 5 화면이 다르게 부르면 시연 중에 못 맞춘다.
 const kPostureLook = <PostureLabel, PostureLook>{
-  PostureLabel.upright: PostureLook('바른 자세', 'UPRIGHT', _green,
+  PostureLabel.upright: PostureLook('바른 자세', 'UPRIGHT', kGreen,
       Icons.airline_seat_recline_normal, '좋아요. 지금 자세를 그대로 유지해 주세요'),
-  PostureLabel.slump: PostureLook('엎드림', 'SLUMP', _red, Icons.airline_seat_flat,
+  PostureLabel.slump: PostureLook('엎드림', 'SLUMP', kRed, Icons.airline_seat_flat,
       '머리가 기준보다 내려간 채로 이어지고 있어요'),
-  PostureLabel.recline: PostureLook('뒤로 젖힘', 'RECLINE', _amber,
+  PostureLabel.recline: PostureLook('뒤로 젖힘', 'RECLINE', kAmber,
       Icons.airline_seat_recline_extra, '센서에서 멀어졌어요. 책상 쪽으로 다시 앉아 보세요'),
-  PostureLabel.drowsy: PostureLook('졸음', 'DROWSY', _violet, Icons.bedtime_outlined,
+  PostureLabel.drowsy: PostureLook('졸음', 'DROWSY', kViolet, Icons.bedtime_outlined,
       '머리가 반복해서 끄덕이고 있어요. 잠깐 쉬어 가는 건 어때요?'),
-  PostureLabel.absent: PostureLook('자리 비움', 'ABSENT', _gray,
+  PostureLabel.absent: PostureLook('자리 비움', 'ABSENT', kGray,
       Icons.person_off_outlined, '책상 앞에 사람이 없어요'),
-  PostureLabel.baseline: PostureLook('기준 측정 중', 'BASELINE', _blue,
+  PostureLabel.baseline: PostureLook('기준 측정 중', 'BASELINE', kBlue,
       Icons.straighten, '바른 자세 기준을 재고 있어요'),
-  PostureLabel.unknown: PostureLook('기준 없음', 'UNKNOWN', _gray,
+  PostureLabel.unknown: PostureLook('기준 없음', 'UNKNOWN', kGray,
       Icons.help_outline, '아직 판정할 기준이 없어요'),
 };
 
@@ -100,10 +89,14 @@ String reasonLabel(String raw) {
 }
 
 class PostureApp extends StatelessWidget {
-  const PostureApp({super.key, this.source});
+  const PostureApp({super.key, this.source, this.store});
 
-  /// 테스트에서 가짜 소스를 꽂는 자리. 비우면 빌드 시 준 주소를 따른다.
+  /// 테스트에서 가짜 소스를 꽂는 자리. 비우면 저장된 주소 → 빌드에 박힌 주소
+  /// → 데모 순으로 정한다.
   final PostureSource? source;
+
+  /// 주소를 적어 두는 파일. 테스트에서는 임시 폴더를 준다.
+  final HubStore? store;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -113,22 +106,24 @@ class PostureApp extends StatelessWidget {
           useMaterial3: true,
           brightness: Brightness.dark,
           fontFamily: 'Roboto',
-          scaffoldBackgroundColor: _bg,
+          scaffoldBackgroundColor: kBg,
         ),
-        home: PostureScreen(source: source),
+        home: PostureScreen(source: source, store: store),
       );
 }
 
 class PostureScreen extends StatefulWidget {
-  const PostureScreen({super.key, this.source});
+  const PostureScreen({super.key, this.source, this.store});
   final PostureSource? source;
+  final HubStore? store;
 
   @override
   State<PostureScreen> createState() => _PostureScreenState();
 }
 
 class _PostureScreenState extends State<PostureScreen> {
-  late final PostureSource _source;
+  late final HubStore _store;
+  late PostureSource _source;
   Timer? _timer;
   PostureState? _state;
   LinkHealth? _health;
@@ -137,13 +132,18 @@ class _PostureScreenState extends State<PostureScreen> {
   bool _calibrating = false;
   int _ticks = 0;
 
+  /// 보드에 적어 둔 주소. 없으면 빌드에 박힌 값을 쓴다.
+  String? _hubOverride;
+
+  /// 주소를 파일에 못 적은 상태. 이번 실행에만 적용되므로 화면이 말해 준다.
+  bool _hubUnsaved = false;
+
   @override
   void initState() {
     super.initState();
-    _source = widget.source ??
-        (_hubUrl.trim().isEmpty
-            ? DemoPostureSource()
-            : HttpPostureSource(_hubUrl.trim()));
+    _store = widget.store ?? HubStore();
+    _hubOverride = _store.read();
+    _source = _makeSource();
     _refresh();
     // 노드도 1Hz 로 내보낸다. 더 자주 긁어도 새 값이 없다.
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
@@ -154,6 +154,51 @@ class _PostureScreenState extends State<PostureScreen> {
     _timer?.cancel();
     _source.close();
     super.dispose();
+  }
+
+  /// 저장된 주소 → 빌드에 박힌 주소 → 데모 순.
+  PostureSource _makeSource() {
+    final injected = widget.source;
+    if (injected != null) return injected;
+    final url = (_hubOverride ?? _hubUrl).trim();
+    return url.isEmpty ? DemoPostureSource() : HttpPostureSource(url);
+  }
+
+  /// 톱니 버튼. 보드에서 Pi 4 주소를 바꾼다.
+  ///
+  /// 이 화면이 있는 이유: 주소를 빌드에 박으면 Pi 4 의 DHCP 주소가 바뀔 때마다
+  /// 다시 구워서 보드와 같은 망에 있는 사람에게 설치를 부탁해야 한다.
+  Future<void> _editHub() async {
+    final current = ipFromUrl(_hubOverride ?? _hubUrl);
+    final result = await showHubSetup(context, currentIp: current);
+    if (result == null || !mounted) return;
+
+    if (result.isEmpty) {
+      _store.clear();
+      _applyHub(null, unsaved: false);
+      _notify('화면 내장 데모로 돌아갑니다');
+      return;
+    }
+    final url = hubUrlFor(result);
+    final saved = _store.save(url);
+    _applyHub(url, unsaved: !saved);
+    _notify(saved
+        ? '자세 노드를 $result 로 봅니다'
+        : '$result 로 봅니다 — 저장할 곳이 없어 이번 실행에만 적용됩니다');
+  }
+
+  void _applyHub(String? url, {required bool unsaved}) {
+    _source.close();
+    setState(() {
+      _hubOverride = url;
+      _hubUnsaved = unsaved;
+      _source = _makeSource();
+      // 이전 주소에서 받은 값이 새 주소의 값인 것처럼 남아 있으면 안 된다.
+      _state = null;
+      _health = null;
+      _error = null;
+    });
+    _refresh();
   }
 
   Future<void> _refresh() async {
@@ -192,7 +237,7 @@ class _PostureScreenState extends State<PostureScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: _surface,
+        backgroundColor: kSurface,
         title: const Text('기준을 다시 잡을까요?'),
         content: const Text('먼저 자리에서 비켜 주세요. 빈 책상을 재고 나면 화면이 '
             '"바른 자세로 앉아 주세요" 로 바뀝니다. 전부 20초쯤 걸립니다.'),
@@ -236,7 +281,7 @@ class _PostureScreenState extends State<PostureScreen> {
           gradient: RadialGradient(
             center: const Alignment(0, -0.45),
             radius: 1.2,
-            colors: [look.color.withValues(alpha: .16), _bg],
+            colors: [look.color.withValues(alpha: .16), kBg],
           ),
         ),
         child: SafeArea(
@@ -267,7 +312,7 @@ class _PostureScreenState extends State<PostureScreen> {
   }
 
   Widget _header(PostureState? state) => Row(children: [
-        const Icon(Icons.chair_alt, color: _green, size: 22),
+        const Icon(Icons.chair_alt, color: kGreen, size: 22),
         const SizedBox(width: 8),
         const Text('DESKMATE · 자세',
             style: TextStyle(
@@ -277,17 +322,17 @@ class _PostureScreenState extends State<PostureScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-                color: _surface, borderRadius: BorderRadius.circular(20)),
+                color: kSurface, borderRadius: BorderRadius.circular(20)),
             child: const Text('DEMO · 실데이터 아님',
-                style: TextStyle(fontSize: 11, color: _muted)),
+                style: TextStyle(fontSize: 11, color: kMuted)),
           ),
         if (_source.canCalibrate)
           TextButton.icon(
             key: const ValueKey('calibrate'),
             onPressed: _calibrating ? null : _calibrate,
             style: TextButton.styleFrom(
-              foregroundColor: _ink,
-              backgroundColor: _surface,
+              foregroundColor: kInk,
+              backgroundColor: kSurface,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
             ),
             icon: _calibrating
@@ -298,7 +343,14 @@ class _PostureScreenState extends State<PostureScreen> {
                 : const Icon(Icons.restart_alt, size: 18),
             label: const Text('기준 다시 잡기'),
           ),
-        const SizedBox(width: 10),
+        IconButton(
+          key: const ValueKey('hub-setup'),
+          tooltip: '자세 노드 주소',
+          onPressed: _editHub,
+          color: kMuted,
+          icon: const Icon(Icons.settings_ethernet),
+        ),
+        const SizedBox(width: 6),
         _link(state),
       ]);
 
@@ -306,10 +358,10 @@ class _PostureScreenState extends State<PostureScreen> {
   Widget _link(PostureState? state) {
     final health = _health;
     final color = _error != null
-        ? _red
+        ? kRed
         : (health != null && !health.healthy)
-            ? _amber
-            : _green;
+            ? kAmber
+            : kGreen;
     return Tooltip(
       message: _source.label,
       child: Container(
@@ -334,7 +386,7 @@ class _PostureScreenState extends State<PostureScreen> {
     if (_error != null) {
       return (
         icon: Icons.link_off,
-        color: _red,
+        color: kRed,
         text: '$_error · ${_source.label}'
       );
     }
@@ -342,14 +394,14 @@ class _PostureScreenState extends State<PostureScreen> {
     if (health?.error != null) {
       return (
         icon: Icons.usb_off,
-        color: _red,
+        color: kRed,
         text: '센서 링크가 끊겼습니다 — ${health!.error}'
       );
     }
     if (health != null && health.stale) {
       return (
         icon: Icons.sensors_off,
-        color: _amber,
+        color: kAmber,
         text: '센서 프레임이 멈췄습니다 — 보드 USB 와 전원을 확인하세요'
       );
     }
@@ -359,15 +411,23 @@ class _PostureScreenState extends State<PostureScreen> {
     if (age.inSeconds >= 5) {
       return (
         icon: Icons.update_disabled,
-        color: _amber,
+        color: kAmber,
         text: '판정이 ${age.inSeconds}초째 갱신되지 않았습니다'
       );
     }
     if (!state.valid) {
       return (
         icon: Icons.straighten,
-        color: _blue,
+        color: kBlue,
         text: state.scenario ?? '기준을 잡는 중입니다 — 판정은 아직 신뢰할 수 없어요'
+      );
+    }
+    // 제일 낮은 순위. 링크가 멀쩡할 때만 알려도 늦지 않다.
+    if (_hubUnsaved) {
+      return (
+        icon: Icons.save_as_outlined,
+        color: kAmber,
+        text: '주소를 보드에 저장하지 못했습니다 — 앱을 다시 켜면 초기화됩니다'
       );
     }
     return null;
@@ -399,7 +459,7 @@ class _PostureScreenState extends State<PostureScreen> {
             child: CircularProgressIndicator(strokeWidth: 3)),
         const SizedBox(height: 16),
         Text(_error == null ? '자세 노드를 기다리는 중입니다' : '자세 노드를 다시 부르는 중입니다',
-            style: const TextStyle(color: _muted)),
+            style: const TextStyle(color: kMuted)),
       ]);
 
   Widget _body(PostureState state, PostureLook look) => Column(
@@ -412,7 +472,7 @@ class _PostureScreenState extends State<PostureScreen> {
             const SizedBox(height: 8),
             Text(state.scenario!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: _dim)),
+                style: const TextStyle(fontSize: 12, color: kDim)),
           ],
           const SizedBox(height: 20),
           _metrics(state),
@@ -426,7 +486,7 @@ class _PostureScreenState extends State<PostureScreen> {
   /// 화면이 제일 먼저 답해야 하는 질문 — 지금 앉아 있는가.
   Widget _presence(PostureState state) {
     final seated = state.present;
-    final color = seated ? _green : _gray;
+    final color = seated ? kGreen : kGray;
     return Container(
       key: const ValueKey('presence'),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
@@ -480,7 +540,7 @@ class _PostureScreenState extends State<PostureScreen> {
             ),
             Text(look.en,
                 style: const TextStyle(
-                    fontSize: 11, letterSpacing: 3, color: _muted)),
+                    fontSize: 11, letterSpacing: 3, color: kMuted)),
           ]),
         ),
         const SizedBox(height: 16),
@@ -489,7 +549,7 @@ class _PostureScreenState extends State<PostureScreen> {
           child: Text(look.desc,
               textAlign: TextAlign.center,
               maxLines: 2,
-              style: const TextStyle(fontSize: 16, color: _ink)),
+              style: const TextStyle(fontSize: 16, color: kInk)),
         ),
       ]);
 
@@ -518,18 +578,18 @@ class _PostureScreenState extends State<PostureScreen> {
         width: 190,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: _surface,
+          color: kSurface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _line),
+          border: Border.all(color: kLine),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label, style: const TextStyle(fontSize: 12, color: _muted)),
+          Text(label, style: const TextStyle(fontSize: 12, color: kMuted)),
           const SizedBox(height: 4),
           Text(value,
               style: const TextStyle(
-                  fontSize: 22, fontWeight: FontWeight.w700, color: _ink)),
+                  fontSize: 22, fontWeight: FontWeight.w700, color: kInk)),
           const SizedBox(height: 2),
-          Text(hint, style: const TextStyle(fontSize: 10, color: _dim)),
+          Text(hint, style: const TextStyle(fontSize: 10, color: kDim)),
         ]),
       );
 
@@ -537,16 +597,16 @@ class _PostureScreenState extends State<PostureScreen> {
   Widget _bars(PostureState state) => SizedBox(
         width: 520,
         child: Row(children: [
-          Expanded(child: _bar('집중 저하', state.focusDrop, _blue)),
+          Expanded(child: _bar('집중 저하', state.focusDrop, kBlue)),
           const SizedBox(width: 20),
-          Expanded(child: _bar('피로', state.fatigue, _amber)),
+          Expanded(child: _bar('피로', state.fatigue, kAmber)),
         ]),
       );
 
   Widget _bar(String label, double value, Color color) =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(label, style: const TextStyle(fontSize: 12, color: _muted)),
+          Text(label, style: const TextStyle(fontSize: 12, color: kMuted)),
           Text('${(value * 100).round()}%',
               style: TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w700, color: color)),
@@ -557,7 +617,7 @@ class _PostureScreenState extends State<PostureScreen> {
           child: LinearProgressIndicator(
             value: value,
             minHeight: 8,
-            backgroundColor: _surface,
+            backgroundColor: kSurface,
             valueColor: AlwaysStoppedAnimation(color),
           ),
         ),
@@ -572,9 +632,9 @@ class _PostureScreenState extends State<PostureScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: _surface,
+                color: kSurface,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: _line),
+                border: Border.all(color: kLine),
               ),
               child: Text(reasonLabel(reason),
                   style:
@@ -594,6 +654,6 @@ class _PostureScreenState extends State<PostureScreen> {
     ];
     return Text(bits.join('   ·   '),
         textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 11, color: _dim));
+        style: const TextStyle(fontSize: 11, color: kDim));
   }
 }

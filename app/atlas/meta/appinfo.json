@@ -1,10 +1,10 @@
 {
     "id": "com.atlas.app.camtest",
     "type": "flutter",
-    "name": "camtest",
+    "name": "Cam Test",
     "description": "DESKMATE ESP32-CAM posture display",
     "entry": "camtest --bundle=./ --fullscreen -a com.atlas.app.camtest",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "required_permissions": {
         "privileged": [],
         "user_consent": []
